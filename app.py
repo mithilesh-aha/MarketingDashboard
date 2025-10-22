@@ -6,7 +6,15 @@ import json
 import plotly.express as px
 from datetime import datetime
 from io import StringIO
-
+try:
+    creds = Credentials.from_service_account_info(st.secrets["service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    client = gspread.authorize(creds)
+    sheet_url = st.secrets["spreadsheet_url"]
+    spreadsheet = client.open_by_url(sheet_url)
+    st.success("✅ Connected successfully to Google Sheet!")
+    st.write("Sheets found:", [s.title for s in spreadsheet.worksheets()])
+except Exception as e:
+    st.error(f"❌ Could not open spreadsheet: {e}")
 st.set_page_config(page_title="Marketing Dashboard", layout="wide")
 
 st.title("📊 Matched Vendor Report")
