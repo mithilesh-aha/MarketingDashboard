@@ -1,52 +1,33 @@
-import streamlit as st
 import pandas as pd
+import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.express as px
 
 # -----------------------------
-# CSV link (published Google Sheet)
+# 1. Load data from CSV link
+# -----------------------------
 csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTdB51W41oj4PvIGlPlA8O1BpOSfIIMr3U3oLkbKxfAC4LyuSu6xkcAz1_Ze3CzHDuNpkJh12tzLrQy/pub?output=csv"
 
-# -----------------------------
-# Load data
 @st.cache_data
 def load_data(url):
     df = pd.read_csv(url)
-    # Clean numeric columns
-    if "Total Amount Spent" in df.columns:
-        df["Total Amount Spent"] = df["Total Amount Spent"].replace('[\$,]', '', regex=True).astype(float)
-    if "Leads" in df.columns:
-        df["Leads"] = pd.to_numeric(df["Leads"], errors='coerce').fillna(0)
-    if "Fronts" in df.columns:
-        df["Fronts"] = pd.to_numeric(df["Fronts"], errors='coerce').fillna(0)
-    if "Sales" in df.columns:
-        df["Sales"] = pd.to_numeric(df["Sales"], errors='coerce').fillna(0)
-    df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
+    # Clean currency/percent columns
+    df["Total Amount Spent"] = df["Total Amount Spent"].replace('[\$,]', '', regex=True).astype(float)
+    df["Cost-Per-Front"] = df["Cost-Per-Front"].replace('[\$,]', '', regex=True).astype(float)
+    df["Cost-Per-Sale"] = df["Cost-Per-Sale"].replace('[\$,]', '', regex=True).astype(float)
+    df["Contact Rate"] = df["Contact Rate"].replace('[\%]', '', regex=True).astype(float)
     return df
 
 df = load_data(csv_url)
 
 # -----------------------------
-# Vendors list
-# Extract unique vendors from Vendors column
-unique_vendors = df["Vendors"].dropna().unique()
+# 2. Vendor list (from Source)
+# -----------------------------
+unique_vendors = df["Source"].unique()
 
 # -----------------------------
-# Streamlit UI
-st.title("Marketing Dashboard")
-st.sidebar.header("Filters")
-selected_vendors = st.sidebar.multiselect("Select Vendor(s)", options=unique_vendors, default=unique_vendors)
-selected_dates = st.sidebar.date_input("Select Date Range", [])
-
+# 3. Color mapping by keywords
 # -----------------------------
-# Filter data
-df_filtered = df[df["Vendors"].isin(selected_vendors)]
-if len(selected_dates) == 2:
-    df_filtered = df_filtered[(df_filtered["Date"] >= pd.to_datetime(selected_dates[0])) & 
-                              (df_filtered["Date"] <= pd.to_datetime(selected_dates[1]))]
-
-# -----------------------------
-# Color map (from your App Script)
 color_map = {
     "darkblue": "#b8cce4",
     "tangerine": "#ffe699",
@@ -68,58 +49,65 @@ color_map = {
 }
 
 # -----------------------------
-# Function to determine row color
-def get_color(vendor_name):
-    match = pd.Series(vendor_name).str.extract(r'\(([^)]+)\)')[0]
-    if pd.isna(match[0]):
-        return color_map["grey"]
-    keyword = match[0].lower()
-    for key in color_map.keys():
-        if key in keyword:
-            return color_map[key]
-    return color_map["grey"]
+# 4. Group by date
+# -----------------------------
+df["Day(date)"] = pd.to_datetime(df["Day(date)"].str.extract(r'\((.*?)\)')[0], format="%m/%d/%Y")
+dates = df["Day(date)"].sort_values().unique()
 
 # -----------------------------
-# Display table with colors
-st.subheader("Matched Report")
-def color_rows(row):
-    return ["background-color: {}".format(get_color(row["Vendors"]))]*len(row)
-
-st.dataframe(df_filtered.style.apply(color_rows, axis=1))
-
+# 5. Streamlit layout
 # -----------------------------
-# Totals per vendor
-st.subheader("Totals per Vendor")
-totals_vendor = df_filtered.groupby("Vendors").agg(
-    Leads=("Leads", "sum"),
-    TotalSpent=("Total Amount Spent", "sum"),
-    Fronts=("Fronts", "sum"),
-    Sales=("Sales", "sum")
-).reset_index()
-totals_vendor["CostPerFront"] = totals_vendor["TotalSpent"] / totals_vendor["Fronts"].replace(0,np.nan)
-totals_vendor["CostPerSale"] = totals_vendor["TotalSpent"] / totals_vendor["Sales"].replace(0,np.nan)
-st.dataframe(totals_vendor.style.format({"TotalSpent":"${:,.2f}", "CostPerFront":"${:,.2f}", "CostPerSale":"${:,.2f}"}))
+st.set_page_config(layout="wide")
+st.title("Vendor Matched Report Dashboard")
 
-# -----------------------------
-# Grand totals
-st.subheader("Grand Total")
-grand_totals = pd.DataFrame({
-    "Leads": [totals_vendor["Leads"].sum()],
-    "TotalSpent": [totals_vendor["TotalSpent"].sum()],
-    "Fronts": [totals_vendor["Fronts"].sum()],
-    "Sales": [totals_vendor["Sales"].sum()],
-    "CostPerFront": [totals_vendor["TotalSpent"].sum()/totals_vendor["Fronts"].sum() if totals_vendor["Fronts"].sum()>0 else 0],
-    "CostPerSale": [totals_vendor["TotalSpent"].sum()/totals_vendor["Sales"].sum() if totals_vendor["Sales"].sum()>0 else 0]
-})
-st.dataframe(grand_totals.style.format({"TotalSpent":"${:,.2f}", "CostPerFront":"${:,.2f}", "CostPerSale":"${:,.2f}"}))
+for date in dates:
+    st.subheader(f"📅 {date.strftime('%A (%m/%d/%Y)')}")
+    date_df = df[df["Day(date)"] == date]
+    
+    all_matched_rows = []
 
-# -----------------------------
-# Graphs
-st.subheader("Visualization: Total Spent per Vendor")
-fig, ax = plt.subplots(figsize=(10,6))
-ax.bar(totals_vendor["Vendors"], totals_vendor["TotalSpent"], color="skyblue")
-ax.set_xlabel("Vendors")
-ax.set_ylabel("Total Amount Spent")
-ax.set_title("Total Spent per Vendor")
-plt.xticks(rotation=45, ha="right")
-st.pyplot(fig)
+    for vendor in unique_vendors:
+        keyword_match = [k for k in color_map.keys() if k in vendor.lower()]
+        bg_color = color_map[keyword_match[0]] if keyword_match else color_map["grey"]
+        matched_rows = date_df[date_df["Source"].str.lower().str.contains(vendor.lower())]
+        if matched_rows.empty:
+            continue
+        all_matched_rows.append(matched_rows)
+        
+        # Vendor totals
+        num_leads = matched_rows["Number of Leads"].sum()
+        total_spent = matched_rows["Total Amount Spent"].sum()
+        total_fronts = matched_rows["Fronts"].sum()
+        total_sales = matched_rows["Sales"].sum()
+        cost_per_front = total_spent / total_fronts if total_fronts > 0 else 0
+        cost_per_sale = total_spent / total_sales if total_sales > 0 else 0
+        
+        st.markdown(f"**Vendor: {vendor}**")
+        st.dataframe(matched_rows.style.set_properties(**{'background-color': bg_color}))
+        st.markdown(f"**TOTAL ({vendor})**: Leads={num_leads}, Spent=${total_spent:.2f}, Fronts={total_fronts}, Sales={total_sales}, Cost/Front=${cost_per_front:.2f}, Cost/Sale=${cost_per_sale:.2f}")
+
+    # Grand totals for date
+    if all_matched_rows:
+        all_df = pd.concat(all_matched_rows)
+        grand_leads = all_df["Number of Leads"].sum()
+        grand_spent = all_df["Total Amount Spent"].sum()
+        grand_fronts = all_df["Fronts"].sum()
+        grand_sales = all_df["Sales"].sum()
+        cost_per_front_all = grand_spent / grand_fronts if grand_fronts > 0 else 0
+        cost_per_sale_all = grand_spent / grand_sales if grand_sales > 0 else 0
+        st.markdown(f"**GRAND TOTAL ({date.strftime('%A')})**: Leads={grand_leads}, Spent=${grand_spent:.2f}, Fronts={grand_fronts}, Sales={grand_sales}, Cost/Front=${cost_per_front_all:.2f}, Cost/Sale=${cost_per_sale_all:.2f}")
+    
+    # -----------------------------
+    # 6. Graphs
+    # -----------------------------
+    fig1 = px.bar(date_df, x="Source", y="Number of Leads", color="Source", title="Leads per Vendor")
+    st.plotly_chart(fig1, use_container_width=True)
+    
+    fig2 = px.bar(date_df, x="Source", y="Total Amount Spent", color="Source", title="Total Spent per Vendor")
+    st.plotly_chart(fig2, use_container_width=True)
+    
+    fig3 = px.bar(date_df, x="Source", y="Fronts", color="Source", title="Fronts per Vendor")
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    fig4 = px.bar(date_df, x="Source", y="Sales", color="Source", title="Sales per Vendor")
+    st.plotly_chart(fig4, use_container_width=True)
